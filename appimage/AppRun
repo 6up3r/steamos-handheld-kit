@@ -1,0 +1,207 @@
+#!/usr/bin/env bash
+# Entry point of the AppImage.
+#
+# Double-clicked, it offers a short menu and then runs the setup where the user
+# can watch it: inside a terminal window opened on purpose, because a window
+# that appears to do nothing for a quarter of an hour while a gigabyte
+# downloads reads as a crash. Where no terminal emulator exists it falls back
+# to a progress dialog fed from the log.
+#
+# Started with arguments, or with no graphical session, it behaves like the
+# scripts it carries and passes everything straight through.
+
+set -Eeuo pipefail
+
+APPDIR="${APPDIR:-$(cd -- "$(dirname -- "$(readlink -f "$0")")" && pwd)}"
+export APPDIR
+LAUNCHER="$APPDIR/usr/lib/launcher"
+PAYLOAD="$APPDIR/usr/lib/steamos-handheld-kit"
+
+# shellcheck source=lib/gui.sh
+. "$LAUNCHER/gui.sh"
+
+VERSION="$(cat "$PAYLOAD/VERSION" 2>/dev/null || echo unknown)"
+LOG_FILE="$HOME/steamos-handheld-kit.log"
+RESULTS_FILE="$HOME/steamos-handheld-kit-results.tsv"
+
+usage() {
+    cat <<END
+SteamOS Handheld Kit $VERSION
+
+Run it with no arguments to choose what to do from a menu.
+
+  --dry-run           show what would be installed, change nothing
+  --verify            check an already configured system
+  --teardown          remove what this tool installed
+  --only <module>     run a single module
+  --version           print the version and exit
+  -h, --help          this message
+
+Any other argument is passed to the setup script unchanged; run
+"--teardown --help" for the removal options.
+END
+}
+
+# ---------------------------------------------------------------------------
+# Command line: anything explicit goes straight to the scripts
+# ---------------------------------------------------------------------------
+if [ $# -gt 0 ]; then
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --version) printf 'steamos-handheld-kit %s\n' "$VERSION"; exit 0 ;;
+        --teardown) shift; exec "$PAYLOAD/teardown.sh" "$@" ;;
+        *) exec "$PAYLOAD/setup.sh" "$@" ;;
+    esac
+fi
+
+# No graphical session means no dialogs: the terminal path is the only one
+# left, and it is also what a remote shell wants.
+if ! gui_available; then
+    exec "$PAYLOAD/setup.sh"
+fi
+
+# ---------------------------------------------------------------------------
+# Which action
+# ---------------------------------------------------------------------------
+action="$(gui_menu "What would you like to do with this handheld?" \
+    install "Set it up"        "Install everything and configure Steam" \
+    dryrun  "Preview only"     "List what would be installed, change nothing" \
+    verify  "Check the setup"  "Report what is present and what is missing" \
+    remove  "Remove it"        "Uninstall what this tool installed" \
+    || true)"
+
+[ -z "$action" ] && exit 0
+
+case "$action" in
+    install|dryrun|verify|remove) ;;
+    *) gui_error "Unrecognised choice: $action"; exit 2 ;;
+esac
+
+if [ "$action" = "remove" ]; then
+    gui_question "Remove the applications this tool installed?
+
+Your games, saves, ROMs and accounts are left alone. Entries already added to the Steam library have to be removed from Steam itself." || exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Where to run it so the user can see it happening
+# ---------------------------------------------------------------------------
+find_terminal() {
+    local candidate
+    for candidate in konsole ptyxis gnome-terminal xfce4-terminal alacritty kitty xterm; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Each terminal spells "run this program" differently, and several hand the
+# request to a daemon and return at once - which is why the launcher waits on
+# the files the worker writes rather than on this command's exit.
+launch_terminal() {
+    local terminal="$1" script="$2"
+    case "$terminal" in
+        gnome-terminal) "$terminal" --wait -- "$script" ;;
+        ptyxis)         "$terminal" --new-window -- "$script" ;;
+        kitty)          "$terminal" "$script" ;;
+        *)              "$terminal" -e "$script" ;;
+    esac
+}
+
+# Feeds the progress dialog with the step the log last reported, so the window
+# names what is happening instead of only spinning.
+progress_feed() {
+    local worker_pid="$1" last="" line
+    printf '# Starting\n'
+    while kill -0 "$worker_pid" 2>/dev/null; do
+        line="$(grep -aoE '(STEP|=====) .*' "$LOG_FILE" 2>/dev/null | tail -1 || true)"
+        line="${line#STEP }"
+        line="${line#===== }"
+        line="${line% =====}"
+        if [ -n "$line" ] && [ "$line" != "$last" ]; then
+            printf '# %s\n' "$line"
+            last="$line"
+        fi
+        sleep 1
+    done
+    printf '# Finishing\n'
+}
+
+rundir="$(mktemp -d -t steamos-handheld-kit-run.XXXXXX)"
+trap 'rm -rf "$rundir"' EXIT
+
+export LAUNCHER_ACTION="$action"
+export LAUNCHER_RUNDIR="$rundir"
+
+terminal="$(find_terminal || true)"
+
+if [ -n "$terminal" ]; then
+    export LAUNCHER_IN_TERMINAL=1
+    launch_terminal "$terminal" "$LAUNCHER/run.sh" >/dev/null 2>&1 &
+
+    # A window that has not signalled itself within half a minute is treated as
+    # one that never opened.
+    for _ in $(seq 1 30); do
+        [ -f "$rundir/started" ] && break
+        sleep 1
+    done
+    if [ ! -f "$rundir/started" ]; then
+        terminal=""
+    fi
+fi
+
+if [ -z "$terminal" ]; then
+    export LAUNCHER_IN_TERMINAL=0
+    "$LAUNCHER/run.sh" >>"$LOG_FILE" 2>&1 &
+    worker=$!
+    progress_feed "$worker" | gui_progress "Working. The full log is written to $LOG_FILE"
+    wait "$worker" 2>/dev/null || true
+fi
+
+# The run is over when the worker says so, not when a window closes.
+while [ ! -f "$rundir/status" ]; do
+    sleep 2
+done
+rc="$(cat "$rundir/status" 2>/dev/null || echo 1)"
+
+# ---------------------------------------------------------------------------
+# Outcome
+# ---------------------------------------------------------------------------
+manual_steps=""
+if [ "$action" = "install" ] && [ -f "$RESULTS_FILE" ]; then
+    manual_steps="$(awk -F'\t' '$2 == "MANUAL" { printf "  - %s: %s\n", $1, $3 }' "$RESULTS_FILE" 2>/dev/null || true)"
+fi
+
+case "$action" in
+    dryrun) done_text="The preview finished. Nothing on this handheld was changed." ;;
+    verify) done_text="The check finished." ;;
+    remove) done_text="The removal finished." ;;
+    *)      done_text="The setup finished." ;;
+esac
+
+if [ "$rc" = "0" ]; then
+    message="$done_text"
+    if [ -n "$manual_steps" ]; then
+        message="$message
+
+A few things still need you:
+
+$manual_steps"
+    fi
+    message="$message
+
+Full log: $LOG_FILE"
+    gui_info "$message"
+else
+    gui_error "$done_text
+
+Some entries did not complete (exit status $rc). The log lists each one:
+
+$LOG_FILE
+
+Running this again is safe: everything already in place is left as it is."
+fi
+
+exit "$rc"

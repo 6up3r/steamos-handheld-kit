@@ -1,0 +1,96 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  appimage:
+    runs-on: ubuntu-latest
+    permissions:
+      # Needed by the release step only, which runs on tags.
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends desktop-file-utils
+
+      - name: Check that the tag matches src/VERSION
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version="$(cat src/VERSION)"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$version" != "$tag" ]; then
+            echo "tag $GITHUB_REF_NAME does not match src/VERSION ($version)" >&2
+            exit 1
+          fi
+          echo "tag and version agree: $version"
+
+      # build.sh parses every shell script, compiles the Python, runs
+      # shellcheck (preinstalled on this runner) and validates the .desktop
+      # entry before it packs anything.
+      - name: Build the AppImage
+        run: ./build.sh
+
+      - name: Check that the AppImage answers
+        run: |
+          image="$(find dist -name '*.AppImage' -print -quit)"
+          # No FUSE on the runner, so the image is unpacked instead of mounted.
+          # --version reaches the launcher, which reads the payload it carries:
+          # a mis-assembled AppDir fails here rather than on a user's machine.
+          "$image" --appimage-extract >/dev/null
+          reported="$(./squashfs-root/AppRun --version)"
+          echo "$reported"
+          test "$reported" = "steamos-handheld-kit $(cat src/VERSION)"
+          rm -rf squashfs-root
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SteamOS-Handheld-Kit
+          path: |
+            dist/*.AppImage
+            dist/SHA256SUMS
+          if-no-files-found: error
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="$(cat src/VERSION)"
+          # Release notes are the CHANGELOG section for this version, so the
+          # two can never drift apart.
+          #
+          # The heading is matched with index() against a literal rather than
+          # as a regular expression: "## [0.2.0]" read as one turns the
+          # brackets into a character class, and awk implementations disagree
+          # about whether the backslashes in the string survive that far. The
+          # result is an extraction that works under mawk and silently matches
+          # nothing under gawk.
+          awk -v header="## [$version]" '
+            index($0, header) == 1              { collecting = 1; next }
+            collecting && index($0, "## [") == 1 { exit }
+            collecting                          { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "CHANGELOG.md has no section for $version" >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            dist/*.AppImage dist/SHA256SUMS \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file release-notes.md

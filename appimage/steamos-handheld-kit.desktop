@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=SteamOS Handheld Kit
+GenericName=Handheld setup
+Comment=Set up a freshly installed SteamOS handheld
+Exec=AppRun
+Icon=steamos-handheld-kit
+Terminal=false
+Categories=Game;Utility;
+Keywords=SteamOS;handheld;Steam Deck;Decky;Proton;emulation;

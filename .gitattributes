@@ -1,0 +1,6 @@
+# Shell scripts are unrunnable on Linux with CRLF line endings, and this
+# repository is edited from several platforms. Every text file is stored and
+# checked out with LF, whatever the checkout platform does by default.
+* text=auto eol=lf
+
+*.png binary

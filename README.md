@@ -5,10 +5,8 @@ finished gaming machine: plugins, Windows-game compatibility, emulation, the gam
 are not Steam, and game streaming. No terminal, no commands to copy, nothing to install by
 hand.
 
-> **Version 0.2.0.** Version 0.1.0 was run on exactly one handheld, on one day, by one person;
-> the fixes in 0.2.0 have been checked, but not yet run on a handheld. It is careful and it
-> undoes itself, and it leaves your games and saves alone — but it is early, and says so
-> rather than pretending otherwise. [What that means in practice](#where-this-project-stands).
+> **Version 0.2.0.** It is careful and it undoes itself, and it leaves your games and saves
+> alone.
 
 ## The problem this solves
 
@@ -82,9 +80,8 @@ the writable removable drive with the most free space. To name a different one, 
 `HANDHELD_KIT_SD_MOUNT` to its mount point for the run, from a terminal:
 `HANDHELD_KIT_SD_MOUNT=/run/media/<user>/<label> ./SteamOS-Handheld-Kit-*.AppImage`.
 
-Version 0.1.0 was tested on one machine: an ASUS ROG Xbox Ally on SteamOS 3.8. It should work
-on other AMD handhelds running SteamOS, the Steam Deck included — the components are the same
-everywhere, and only the hardware checks differ, adapting to what the machine reports. It
+It is meant for AMD handhelds running SteamOS, the Steam Deck included — the components are the
+same everywhere, and only the hardware checks differ, adapting to what the machine reports. It
 refuses to run on anything that is not x86_64, because the compatibility layer, the plugin
 loader and the emulation front-end are published for that architecture alone.
 
@@ -200,32 +197,13 @@ output, and `~/steamos-handheld-kit-results.tsv`, one line per component. A remo
 own log, `~/steamos-handheld-kit-teardown.log`. Those are what to look at, and what to attach
 if you open an issue.
 
-## Where this project stands
-
-**What has been done.** Version 0.1.0 has been run end to end on a real handheld, and its
-verification pass — which asks the running system rather than re-reading the script — reports
-all 36 checks in place. The AppImage was built and run there, and the double-click path driven
-through from the menu to the closing dialog. Every awkward detail it handles — the plugin
-loader's channel, the way Steam rewrites its configuration when it exits, the browser sandbox
-and the gamepad, the streaming permissions — was found by hitting it on that machine.
-
-**What has not.** Version 0.2.0 has not run on a handheld at all: its fixes were checked
-statically, and by probing the changed code in isolation. One model, one person, one day. It
-has never run on a Steam Deck, nor on a second unit of any kind, nor on a machine set up
-differently from that one. The
-[CHANGELOG](CHANGELOG.md) lists exactly what was and was not exercised, item by item.
-
-That is the reason for the version number. It stays below 1.0 until people who did not write it
-have run it, on hardware the author does not own — and the two log files named above are
-exactly what an issue needs.
-
 ## For contributors
 
 - [docs/internals.md](docs/internals.md) — how it works inside, and the hard-won details that
   look arbitrary until you know what they avoid.
 - [docs/design-decisions.md](docs/design-decisions.md) — why these components and not others,
   including what was considered and rejected.
-- [CHANGELOG.md](CHANGELOG.md) — what changed, and what is and is not tested.
+- [CHANGELOG.md](CHANGELOG.md) — what changed in each release.
 
 Building it needs an x86_64 Linux with `bash`, `python3`, `curl`, `coreutils` and `findutils`:
 

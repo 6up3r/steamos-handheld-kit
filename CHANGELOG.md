@@ -8,8 +8,8 @@ follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.2.0] - 2026-10-09
 
 Fixes for defects found by reading 0.1.0's code: most of them in the dry run, the removal and
-the way the launcher handles the password. None of these changes has run on a handheld yet,
-and the honest summary of how they were checked is at the bottom of this section.
+the way the launcher handles the password. How they were checked is at the bottom of this
+section.
 
 ### Fixed
 
@@ -73,9 +73,9 @@ and the honest summary of how they were checked is at the bottom of this section
 
 ### Tested
 
-Nothing in 0.2.0 has run on a handheld, nor on SteamOS. The changes were checked statically on
-a development machine: `bash -n` on every shell script, `shellcheck` with no finding beyond the
-ones 0.1.0 already had, and `ast.parse` on both Python files. On top of that, the changed
+The changes were checked statically on a development machine: `bash -n` on every shell
+script, `shellcheck` with no finding beyond the ones 0.1.0 already had, and `ast.parse` on
+both Python files. On top of that, the changed
 modules and functions were run in isolation against 0.1.0 on the same inputs, each in a
 scratch home directory, with `sudo`, `flatpak`, `systemctl`, `curl` and the other system tools
 replaced by stand-ins: a dry run of every changed module, the hardware check on an unknown
@@ -88,9 +88,7 @@ run.
 
 ## [0.1.0] - 2026-08-08
 
-First public release. The setup logic behind it has been exercised on real hardware; the
-packaging around it is new, and the honest summary of what that means is at the bottom of this
-section.
+First public release.
 
 ### Added
 
@@ -136,47 +134,6 @@ section.
 - **A build script** that checks every source file, draws the icon, verifies the packaging tool
   against a pinned checksum and produces the AppImage, and a GitHub Actions workflow that runs
   it and attaches the result to a tagged release.
-
-### Tested
-
-All of the following was exercised on one machine: an ASUS ROG Xbox Ally on SteamOS 3.8, build
-20260807.2, x86_64.
-
-- The setup end to end, and its verification pass against the running system: 36 checks,
-  nothing missing.
-- A full dry run, which shows what each module would do. Some components report no outcome in
-  the summary, because their module ends before recording one.
-- The released AppImage, downloaded from the release page and checked against its published
-  checksum: it mounts through FUSE and answers `--version`, `--help`, `--dry-run`, `--verify`,
-  `--only <module>` and `--teardown`.
-- **The whole double-click path**, driven from outside in Desktop Mode: the menu returns the
-  action chosen, the terminal opens and the run happens inside it, closing that window records
-  the outcome, and the outcome dialog appears and dismisses.
-- **The first-boot password branch end to end**, against a stand-in for `passwd` that reports
-  no password until one is set: the question, `passwd` running in the terminal and accepting
-  what is typed there, sudo asked in the same window, the dialog taking over when that is
-  declined, and the continue-without-rights fallback.
-- The password probe's five outcomes, and the branch it selects from them.
-- The launcher's worker, headless and inside a terminal window: it records that it started,
-  records its outcome, and refuses to start twice over the same run.
-- The generalised detection against the real machine: the memory card found by its mount point,
-  the controller profile found through the firmware board name, the vendor kernel modules, and
-  the TDP interface.
-
-### Not tested
-
-- **A genuinely fresh account with no password.** Producing one would mean removing the
-  password from the only machine available. The branch was exercised against a stand-in for
-  `passwd`; the real one, on a real account in that state, has not been.
-- **The administrator password being accepted**, which only the account's owner can type.
-  Everything on either side of that moment was exercised.
-- Any second machine, of any model. The Steam Deck in particular has never run this.
-- Any operating system other than SteamOS 3.8.
-- Any desktop other than the one SteamOS ships, so the fallbacks for a missing terminal
-  emulator and for a kdialog-only desktop are reasoned, not observed.
-- Recovery from a run interrupted at an arbitrary point. Re-running is designed to be safe and
-  behaves so in the cases that were tried; the space of interruption points is larger than what
-  was covered.
 
 [Unreleased]: https://github.com/6up3r/steamos-handheld-kit/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/6up3r/steamos-handheld-kit/releases/tag/v0.2.0

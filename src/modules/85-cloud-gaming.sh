@@ -19,6 +19,9 @@ XBOX_URL="https://www.xbox.com/play"
 
 graphics_available() { [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; }
 
+# The real effect of NVIDIA's installer: the entry it adds to the library.
+gfn_in_library() { grep -qa 'GeForce NOW' "$STEAM_ROOT"/userdata/*/config/shortcuts.vdf 2>/dev/null; }
+
 # ===========================================================================
 # Xbox Cloud Gaming
 # ===========================================================================
@@ -40,11 +43,12 @@ fi
 
 log_step "Xbox Cloud Gaming entry"
 desktop="$HOME/.local/share/applications/xbox-cloud-gaming.desktop"
-mkdir -p "$(dirname "$desktop")"
 
 if [ "$DRY_RUN" = "1" ]; then
     printf '  %s[dry run]%s would create %s\n' "$C_YELLOW" "$C_RESET" "$desktop"
+    record "Xbox Cloud Gaming" PLANNED "menu entry"
 else
+    mkdir -p "$(dirname "$desktop")"
     cat > "$desktop" <<END
 [Desktop Entry]
 Type=Application
@@ -77,8 +81,17 @@ if flatpak_has com.google.Chrome; then
         || log_warn "the grant for Chrome failed"
 fi
 
+# Already in the library: running the installer again would only bring its
+# consent dialog back.
+if gfn_in_library; then
+    log_ok "GeForce NOW already in the Steam library"
+    record "GeForce NOW" PRESENT "Steam library entry"
+    exit "$status"
+fi
+
 if [ "$DRY_RUN" = "1" ]; then
     printf '  %s[dry run]%s would download and run the NVIDIA installer\n' "$C_YELLOW" "$C_RESET"
+    record "GeForce NOW" PLANNED "NVIDIA's SteamOS installer"
     exit 0
 fi
 
@@ -109,7 +122,8 @@ fi
 if [ -x "$GFN_DIR/bin/GeForceNOW_Setup_Helper" ]; then
     log_ok "the NVIDIA installer is already present in $GFN_DIR"
 else
-    archive="${TMPDIR:-/tmp}/GeForceNOW_Setup.zip"
+    archive="$(mktemp)"
+    trap 'rm -f "$archive"' EXIT
     if ! download_verified "$GFN_URL" "$archive" ""; then
         record "GeForce NOW" FAILED "download failed"
         exit 1
@@ -138,7 +152,7 @@ if graphics_available; then
     if ( cd "$GFN_DIR" && python3 ./bin/GeForceNOW_Setup_Helper ); then
         # Exit status 0 does not prove the user consented: the real effect is
         # checked instead, which is the entry appearing in the library.
-        if grep -qa 'GeForce NOW' "$STEAM_ROOT"/userdata/*/config/shortcuts.vdf 2>/dev/null; then
+        if gfn_in_library; then
             log_ok "GeForce NOW added to the Steam library"
             record "GeForce NOW" INSTALLED "Steam entry with NVIDIA artwork"
         else

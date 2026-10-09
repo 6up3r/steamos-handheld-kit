@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Builds the AppImage.
 #
-# Runs on any x86_64 Linux with bash, python3, curl and coreutils. The only
-# external tool it needs is appimagetool, which it downloads once into .tools/
-# and verifies against a pinned checksum before running.
+# Runs on any x86_64 Linux with bash, python3, curl, coreutils and findutils.
+# The only external tool it needs is appimagetool, which it downloads once into
+# .tools/ and verifies against a pinned checksum before running.
 #
 #   ./build.sh                 build into dist/
 #   APPIMAGETOOL=/path/to/it ./build.sh    use a copy already on this machine

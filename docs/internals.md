@@ -1,9 +1,9 @@
 # How it works inside
 
 This page is for people changing the code. It covers the structure, the packaging, and the
-details that look arbitrary until you know what they avoid — most of which cost real debugging
-on real hardware. [design-decisions.md](design-decisions.md) covers why these components were
-chosen; the README covers what the tool does and how a user runs it.
+details that look arbitrary until you know what they avoid.
+[design-decisions.md](design-decisions.md) covers why these components were chosen; the README
+covers what the tool does and how a user runs it.
 
 ## Layout
 
@@ -14,7 +14,7 @@ src/                         the setup logic — this tree runs unchanged from a
   VERSION                    the single source of the version number
   lib/common.sh              logging, outcomes, traced execution, state queries, privileges
   lib/preflight.sh           the checks that gate a run
-  lib/steam_config.py        writes shortcuts.vdf and config.vdf
+  lib/steam_config.py        writes shortcuts.vdf and config.vdf, reads the default back
   modules/NN-name.sh         one concern each, numbered by dependency order
 appimage/                    the graphical wrapper
   AppRun                     entry point of the AppImage: mode, menu, terminal, outcome
@@ -32,9 +32,17 @@ dependency order and there is no second list to keep in step with it. Each modul
 own process: one that fails is recorded and the others still run. Each module also sources
 `lib/common.sh` itself, so any of them can be run on its own with `--only`.
 
-The version lives in `src/VERSION` and nowhere else. `common.sh` reads it at runtime,
-`build.sh` reads it for the output filename, and the workflow refuses to publish a tag that
-disagrees with it.
+Every outcome goes through `record()`. In a dry run nothing is carried out, so it turns an
+action's outcome — installed, updated, removed, failed — into `PLANNED`, and each module's
+dry-run branch records a planned line for what it skips, so the summary still names every
+component. A module that only observes, as `10-hardware-check.sh` and `90-verify.sh` do, sets
+`OBSERVATION_ONLY=1`, and its failures stay failures: what it found holds in a dry run too.
+`setup.sh` decides whether to ask for the password from the exact list of modules `--only` and
+`--skip` leave in the run, through the same function the runner uses.
+
+`src/VERSION` is the source of the version number: `common.sh` and the launcher read it at
+runtime, `build.sh` reads it for the output filename, and the workflow refuses to publish a tag
+that disagrees with it. The README banner and the CHANGELOG carry the number by hand.
 
 ## The ground rules of the platform
 
@@ -43,8 +51,11 @@ disagrees with it.
 The root filesystem is read-only and there are two of them. A system update writes the inactive
 partition and reboots into it, so anything installed with `pacman` is gone at the next update —
 silently, and long after whoever installed it has forgotten. Three destinations survive:
-`/var/lib/flatpak`, `~/homebrew` (Decky), and the user's home directory. Every module writes to
-one of those three and to nothing else. The read-only root is never disabled.
+`/var/lib/flatpak`, `~/homebrew` (Decky), and the user's home directory. The kit's own code
+writes to one of those three and to nothing else. The installers it runs also write under
+`/etc`: Decky's creates `plugin_loader.service` in `/etc/systemd/system`, and Sunshine's
+`additional-install.sh` creates `60-sunshine.rules` in `/etc/udev/rules.d`. The read-only root
+is never disabled.
 
 ### Flatpak system scope needs polkit
 
@@ -77,7 +88,9 @@ its place: a handheld with no controller. When the session variables are missing
 over SSH, the module reads them out of `/proc/<pid>/environ` of the running desktop.
 
 The global default compatibility tool is `CompatToolMapping."0"` in `config.vdf`. Only that key
-is touched; per-title choices belong to the user.
+is touched; per-title choices belong to the user. The verification reads the same key back with
+`steam_config.py --print-proton`, because the tool's name appearing elsewhere in the file is a
+per-title choice and proves nothing about the default.
 
 ### Decky Loader is the fragile part
 
@@ -113,7 +126,9 @@ is touched; per-title choices belong to the user.
 - **GeForce NOW**: NVIDIA's SteamOS installer asks for consent through `kdialog` as its very
   first action, and **exits 0 without installing anything** when that dialog cannot be drawn. A
   headless run must treat that as "not done": `85-cloud-gaming.sh` checks the real effect — the
-  entry appearing in `shortcuts.vdf` — rather than the exit status.
+  entry appearing in `shortcuts.vdf` — rather than the exit status. It checks the same effect
+  before starting the installer, so a run that finds the entry already there does not bring the
+  consent dialog back.
 - **Sunshine**: install the Flatpak, then run its bundled `additional-install.sh`, which adds
   the udev rule and registers the user service `app-dev.lizardbyte.app.Sunshine.service`. The
   rule carries `TAG+="uaccess"`, which grants `/dev/uinput` to the active session by ACL — no
@@ -175,14 +190,21 @@ worker that executes inside that window — is what asks. `askpass.sh` is the sa
 keepalive ever dies and a privileged step is reached with no terminal, sudo calls it and the
 user sees a dialog instead of a run that hangs with nothing on screen.
 
+Declining the password is a supported answer, and it holds for the rest of the run. `run.sh`
+then exports `HANDHELD_KIT_NO_PRIVILEGES=1`: `sudo_begin()` asks nothing, and every privileged
+step first calls `privileges_allowed()`, which in that state accepts only a ticket that already
+exists (`sudo -n`). A step without one records `SKIPPED` instead of prompting, so the Decky
+installation, its plugins and its removal are reported as not done and everything else runs.
+
 ### A first boot has no password at all
 
 The user account SteamOS ships has no password, and in that state `sudo` rejects everything
 typed at it — so the naive flow gives three refused password dialogs and no explanation. The
 state is readable without privileges: `passwd -S <user>` reports its own account's status to
 its owner, `P` for a usable password, `L` for a locked one, `NP` for none. `password_status()`
-in `common.sh` maps those three onto `set`, `unset` and `unknown`, and an unreadable answer is
-`unknown` rather than `unset` so a failed probe never blocks a machine that was fine.
+in `common.sh` maps `P` to `set`, `L` and `NP` to `unset`, and anything else to `unknown`. An
+unreadable answer is `unknown` rather than `unset` so a failed probe never blocks a machine
+that was fine.
 
 Both layers read it. `sudo_begin()` names the remedy instead of prompting into a wall.
 `run.sh`, which has a terminal, offers to run `passwd` right there and then hands the same
@@ -206,6 +228,12 @@ thirty seconds — long enough for any window to appear — and falls back to a 
 it never arrives, then waits for the second however long the run takes. `started` is created
 under `noclobber`, so if the terminal was merely slow and both paths start a worker, exactly
 one of them wins and the other exits.
+
+The removal leans on that window for its confirmation. `teardown.sh` lists what it will remove
+and asks for a typed `REMOVE`, and that is the only question the double-click path asks. Without
+a terminal, `--confirm` asks nothing, so on the progress-dialog fallback `AppRun` puts the
+output of `teardown.sh --list` in a dialog and asks there instead. The removal ends with one
+line per component and exits 1 when any of them failed, which is what the closing dialog reads.
 
 ### FUSE
 
@@ -235,11 +263,14 @@ a checksum the packaging tool could change under the project without a trace. Wi
 becomes a loud build failure. `APPIMAGETOOL_SHA256` and `APPIMAGETOOL` exist to unblock a build
 deliberately once the change has been looked at.
 
-`.github/workflows/build.yml` runs the same script on every push and pull request. On a `v*`
-tag it additionally checks the tag against `src/VERSION`, unpacks the built image and asks it
-for its version — a mis-assembled AppDir fails there rather than on a user's machine — and then
-creates the release with the AppImage, the checksum file and the matching CHANGELOG section as
-its notes.
+`.github/workflows/build.yml` runs the same script on pushes to `main`, on pull requests, on
+`v*` tags and on manual dispatch, then unpacks the built image and asks it for its version — a
+mis-assembled AppDir fails there rather than on a user's machine — and uploads it as an
+artifact. That job can only read the repository. On a `v*` tag it also checks the tag against
+`src/VERSION`, and a second job, which runs on `v*` tags only and alone holds write access,
+downloads the artifact and creates the release with the AppImage, the checksum file and the
+matching CHANGELOG section as its notes. The section ends at the next `## [` heading or
+at the link references at the bottom of the file.
 
 ## Known gaps
 

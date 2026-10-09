@@ -2,7 +2,7 @@
 # Post-installation setup for an AMD gaming handheld running SteamOS.
 # Re-runnable: every step checks the current state before acting.
 #
-#   ./setup.sh --dry-run          show what it would do, touching nothing
+#   ./setup.sh --dry-run          show what it would do, installing nothing
 #   ./setup.sh                    full run
 #   ./setup.sh --only 30-decky    run a single module
 #   ./setup.sh --verify           run the final verification only
@@ -42,7 +42,6 @@ DRY_RUN=0
 ONLY=""
 SKIP=""
 LOG_FILE="$HOME/steamos-handheld-kit.log"
-RESULTS_FILE="$(mktemp -t steamos-handheld-kit-results.XXXXXX)"
 
 usage() {
     cat <<'END'
@@ -65,24 +64,38 @@ Available modules:
   60-emulation        ROM folders on the memory card, and EmuDeck
   70-remote-access    Sunshine streaming server
   80-utilities        SyncThingy
-  85-cloud-gaming     GeForce NOW, Edge, Xbox Cloud Gaming
+  85-cloud-gaming     GeForce NOW, Chrome, Edge, Xbox Cloud Gaming
   88-steam-config     writes to Steam's own configuration
   90-verify           checks the running system
 END
 }
 
+# An option that takes a value, given none.
+needs_value() { printf '%s needs a value\n\n' "$1" >&2; usage >&2; exit 2; }
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY_RUN=1; shift ;;
-        --only)    ONLY="${2:-}"; shift 2 ;;
-        --skip)    SKIP="${2:-}"; shift 2 ;;
+        --only)    [ -n "${2:-}" ] || needs_value "$1"; ONLY="$2"; shift 2 ;;
+        --skip)    [ -n "${2:-}" ] || needs_value "$1"; SKIP="$2"; shift 2 ;;
         --verify)  ONLY="90-verify"; shift ;;
-        --log)     LOG_FILE="${2:-}"; shift 2 ;;
+        --log)     [ -n "${2:-}" ] || needs_value "$1"; LOG_FILE="$2"; shift 2 ;;
         --version) cat "$HANDHELD_KIT_ROOT/VERSION"; exit 0 ;;
         -h|--help) usage; exit 0 ;;
         *) printf 'Unknown option: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
     esac
 done
+
+# On exit the privileges are released and the temporary outcome file removed:
+# the durable copy stays in ~/steamos-handheld-kit-results.tsv, and without
+# this removal every run would leave one behind in the temporary directory.
+# sudo_end comes from common.sh, which an early exit may not have loaded yet.
+RESULTS_FILE="$(mktemp -t steamos-handheld-kit-results.XXXXXX)"
+cleanup_on_exit() {
+    sudo_end 2>/dev/null || true
+    rm -f "$RESULTS_FILE"
+}
+trap 'cleanup_on_exit' EXIT
 
 export DRY_RUN LOG_FILE RESULTS_FILE
 mkdir -p "$(dirname "$LOG_FILE")"
@@ -107,31 +120,41 @@ _write_log "########## start: $(_stamp) version=$SETUP_VERSION dry_run=$DRY_RUN 
 preflight || { log_err "preliminary checks not passed: stopping"; exit 1; }
 
 # ---------------------------------------------------------------------------
+# Module selection, shared by the privilege decision and the runner so the two
+# cannot disagree. Returns 0 to run the module, 1 when --only leaves it out and
+# 2 when --skip excludes it.
+# ---------------------------------------------------------------------------
+module_choice() {
+    if [ -n "$ONLY" ] && [[ "$1" != *"$ONLY"* ]]; then
+        return 1
+    fi
+    if [ -n "$SKIP" ] && [[ "$1" == *"$SKIP"* ]]; then
+        return 2
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # Privileges: asked for once, and only when they are actually needed.
 # Of all the modules only the Decky installation writes outside the home
 # directory; running any of the others must not ask for a password that would
 # then go unused.
 # ---------------------------------------------------------------------------
 MODULES_WITHOUT_PRIVILEGES="88-steam-config 90-verify"
-needs_sudo=1
-if [ -n "$ONLY" ]; then
-    for m in $MODULES_WITHOUT_PRIVILEGES; do
-        [[ "$m" == *"$ONLY"* ]] && needs_sudo=0
-    done
-fi
+needs_sudo=0
+for module in "$HANDHELD_KIT_ROOT"/modules/*.sh; do
+    name="$(basename "$module" .sh)"
+    module_choice "$name" || continue
+    case " $MODULES_WITHOUT_PRIVILEGES " in
+        *" $name "*) ;;
+        *) needs_sudo=1 ;;
+    esac
+done
 if [ "$needs_sudo" = "1" ]; then
     sudo_begin
 else
-    log_info "the requested module needs no privileges"
+    log_info "the selected modules need no privileges"
 fi
-# On exit the privileges are released and the temporary outcome file removed:
-# the durable copy stays in ~/steamos-handheld-kit-results.tsv, and without
-# this removal every run would leave one behind in the temporary directory.
-cleanup_on_exit() {
-    sudo_end
-    [ -n "${RESULTS_FILE:-}" ] && rm -f "$RESULTS_FILE"
-}
-trap 'cleanup_on_exit' EXIT
 
 # ---------------------------------------------------------------------------
 # Module execution. Each runs in its own process: a module that fails is
@@ -143,10 +166,12 @@ modules_failed=0
 for module in "$HANDHELD_KIT_ROOT"/modules/*.sh; do
     name="$(basename "$module" .sh)"
 
-    if [ -n "$ONLY" ] && [[ "$name" != *"$ONLY"* ]]; then
+    choice=0
+    module_choice "$name" || choice=$?
+    if [ "$choice" = "1" ]; then
         continue
     fi
-    if [ -n "$SKIP" ] && [[ "$name" == *"$SKIP"* ]]; then
+    if [ "$choice" = "2" ]; then
         log_warn "module skipped on request: $name"
         record "$name" SKIPPED "excluded with --skip"
         continue
@@ -159,7 +184,8 @@ for module in "$HANDHELD_KIT_ROOT"/modules/*.sh; do
     if [ "$rc" -ne 0 ]; then
         modules_failed=$((modules_failed + 1))
         log_err "module $name ended with status $rc"
-        record "$name" FAILED "exit status $rc"
+        # An exit status is observed, not predicted, in a dry run too.
+        OBSERVATION_ONLY=1 record "$name" FAILED "exit status $rc"
     fi
 done
 
@@ -175,22 +201,7 @@ printf '\n%s%s\n' "$C_BOLD" "===================================================
 printf '  SUMMARY\n'
 printf '%s%s\n\n' "================================================================" "$C_RESET"
 
-if [ -s "$RESULTS_FILE" ]; then
-    while IFS=$'\t' read -r component outcome detail; do
-        case "$outcome" in
-            INSTALLED|UPDATED|VERIFIED|REMOVED) colour="$C_GREEN" ;;
-            PRESENT)                            colour="$C_CYAN"  ;;
-            PLANNED)                            colour="$C_BLUE"  ;;
-            SKIPPED|MANUAL)                     colour="$C_YELLOW";;
-            FAILED)                             colour="$C_RED"   ;;
-            *)                                  colour=""         ;;
-        esac
-        printf '  %s%-12s%s %-34s %s%s%s\n' \
-            "$colour" "$outcome" "$C_RESET" "$component" "$C_DIM" "$detail" "$C_RESET"
-    done < "$RESULTS_FILE"
-else
-    printf '  (no outcome recorded)\n'
-fi
+print_results
 
 failed="$(grep -c $'\tFAILED\t' "$RESULTS_FILE" 2>/dev/null || true)"
 failed="${failed:-0}"
@@ -210,7 +221,7 @@ printf '  outcomes as a table: %s\n\n' "$HOME/steamos-handheld-kit-results.tsv"
 if [ "$DRY_RUN" = "1" ]; then
     printf '  %sDry run finished: nothing was changed.%s\n' "$C_BLUE" "$C_RESET"
     printf '  The PLANNED entries are what a real run would install.\n'
-    printf '  To carry it out: %s./setup.sh%s\n\n' "$C_BOLD" "$C_RESET"
+    printf '  To carry it out, run it again without %s--dry-run%s.\n\n' "$C_BOLD" "$C_RESET"
     exit 0
 fi
 

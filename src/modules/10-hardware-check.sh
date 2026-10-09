@@ -12,6 +12,8 @@ set -Eeuo pipefail
 HANDHELD_KIT_ROOT="${HANDHELD_KIT_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
 . "$HANDHELD_KIT_ROOT/lib/common.sh"
 
+# Every outcome here is observed, in a dry run as much as in a real one.
+export OBSERVATION_ONLY=1
 status=0
 
 # --- InputPlumber: the controller manager -----------------------------------
@@ -132,9 +134,14 @@ done
 if [ -n "$fan_source" ]; then
     log_ok "fan control present: $fan_source"
     record "Fan control" VERIFIED "$fan_source"
-else
+elif device_is_asus || device_is_steam_deck; then
     log_warn "no adjustable fan curve interface found"
     record "Fan control" FAILED "no interface exposed"
+else
+    # The interfaces looked for belong to these two vendors: on any other an
+    # absence says nothing about whether the fan is working.
+    log_info "no fan interface is known for $DEVICE_VENDOR: skipping this check"
+    record "Fan control" SKIPPED "no known fan interface for $DEVICE_VENDOR"
 fi
 
 # --- Decky plugins that fight this hardware ---------------------------------

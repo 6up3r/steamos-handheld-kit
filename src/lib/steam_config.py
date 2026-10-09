@@ -11,6 +11,11 @@ Two operations, independent of each other:
   --shortcut-name   add a non-Steam entry to shortcuts.vdf (binary format)
   --proton          set the global default compatibility tool in config.vdf
                     (text format)
+
+and one read, which changes nothing:
+
+  --print-proton    print the global default compatibility tool, or an empty
+                    line when none is set
 """
 
 import argparse
@@ -124,6 +129,14 @@ def find_branch(root, *names):
     return node
 
 
+def read_default_proton(path):
+    """The name of the global default compatibility tool, or ''."""
+    with open(path, encoding="utf-8") as handle:
+        data = vdf.load(handle)
+    steam = find_branch(data, "InstallConfigStore", "Software", "Valve", "Steam")
+    return steam.get("CompatToolMapping", {}).get("0", {}).get("name", "")
+
+
 def set_default_proton(path, version):
     if not os.path.exists(path):
         print(f"  config.vdf is missing: {path}", file=sys.stderr)
@@ -160,8 +173,9 @@ def main():
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--userdata", required=True,
-                        help="the Steam profile directory (userdata/<id>)")
+    parser.add_argument("--userdata",
+                        help="the Steam profile directory (userdata/<id>), "
+                             "needed by --shortcut-name")
     parser.add_argument("--config", required=True, help="path to config.vdf")
 
     parser.add_argument("--shortcut-name")
@@ -171,8 +185,16 @@ def main():
     parser.add_argument("--shortcut-icon", default="")
 
     parser.add_argument("--proton", help="name of the default compatibility tool")
+    parser.add_argument("--print-proton", action="store_true",
+                        help="print the global default compatibility tool")
 
     args = parser.parse_args()
+    if args.shortcut_name and not args.userdata:
+        parser.error("--shortcut-name needs --userdata")
+
+    if args.print_proton:
+        print(read_default_proton(args.config))
+        return 0
 
     if args.shortcut_name:
         path = os.path.join(args.userdata, "config", "shortcuts.vdf")

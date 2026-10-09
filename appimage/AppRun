@@ -32,8 +32,10 @@ Run it with no arguments to choose what to do from a menu.
 
   --dry-run           show what would be installed, change nothing
   --verify            check an already configured system
-  --teardown          remove what this tool installed
+  --teardown          list what would be removed (add --confirm to remove)
   --only <module>     run a single module
+  --skip <module>     exclude a module from a full run
+  --log <file>        log file path (default: ~/steamos-handheld-kit.log)
   --version           print the version and exit
   -h, --help          this message
 
@@ -76,12 +78,6 @@ case "$action" in
     install|dryrun|verify|remove) ;;
     *) gui_error "Unrecognised choice: $action"; exit 2 ;;
 esac
-
-if [ "$action" = "remove" ]; then
-    gui_question "Remove the applications this tool installed?
-
-Your games, saves, ROMs and accounts are left alone. Entries already added to the Steam library have to be removed from Steam itself." || exit 0
-fi
 
 # ---------------------------------------------------------------------------
 # Where to run it so the user can see it happening
@@ -153,6 +149,15 @@ if [ -n "$terminal" ]; then
 fi
 
 if [ -z "$terminal" ]; then
+    # The terminal window lists what goes and asks for a typed REMOVE. With no
+    # window there is nowhere to type it, so this dialog asks instead, and it
+    # carries the same list.
+    if [ "$action" = "remove" ]; then
+        listing="$("$PAYLOAD/teardown.sh" --list 2>/dev/null | sed -e '1{/^$/d}' -e '/^Nothing was changed/d' || true)"
+        gui_question "$listing
+
+Remove what is listed above?" || exit 0
+    fi
     export LAUNCHER_IN_TERMINAL=0
     "$LAUNCHER/run.sh" >>"$LOG_FILE" 2>&1 &
     worker=$!

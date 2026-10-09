@@ -17,9 +17,6 @@ permissions:
 jobs:
   appimage:
     runs-on: ubuntu-latest
-    permissions:
-      # Needed by the release step only, which runs on tags.
-      contents: write
 
     steps:
       - uses: actions/checkout@v4
@@ -66,8 +63,25 @@ jobs:
             dist/SHA256SUMS
           if-no-files-found: error
 
+  # The only job that can write to the repository, and it runs on v* tags
+  # alone: pull requests and branch pushes never hold that permission.
+  release:
+    needs: appimage
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      # For CHANGELOG.md and src/VERSION; the AppImage comes from the build job.
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: SteamOS-Handheld-Kit
+          path: dist
+
       - name: Publish the release
-        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -81,9 +95,16 @@ jobs:
           # about whether the backslashes in the string survive that far. The
           # result is an extraction that works under mawk and silently matches
           # nothing under gawk.
+          #
+          # The section ends at the next heading or at the link references
+          # Keep a Changelog puts at the bottom ("[0.1.0]: https://..."), found
+          # the same way: the line opens with "[" and its first "]" is the one
+          # followed by ": ".
           awk -v header="## [$version]" '
             index($0, header) == 1              { collecting = 1; next }
             collecting && index($0, "## [") == 1 { exit }
+            collecting && index($0, "[") == 1 && index($0, "]: ") > 2 &&
+              index($0, "]: ") == index($0, "]") { exit }
             collecting                          { print }
           ' CHANGELOG.md > release-notes.md
           if [ ! -s release-notes.md ]; then

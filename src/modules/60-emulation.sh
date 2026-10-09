@@ -49,6 +49,7 @@ log_step "EmuDeck"
 if [ "$DRY_RUN" = "1" ]; then
     printf '  %s[dry run]%s would download the latest EmuDeck AppImage to %s\n' \
         "$C_YELLOW" "$C_RESET" "$APPIMAGE"
+    record "EmuDeck" PLANNED "latest AppImage and a menu entry"
     exit 0
 fi
 

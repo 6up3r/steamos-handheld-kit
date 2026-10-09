@@ -11,10 +11,6 @@ HANDHELD_KIT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 export HANDHELD_KIT_ROOT
 export DRY_RUN=0
 export LOG_FILE="$HOME/steamos-handheld-kit-teardown.log"
-RESULTS_FILE="$(mktemp -t steamos-handheld-teardown-results.XXXXXX)"
-export RESULTS_FILE
-
-. "$HANDHELD_KIT_ROOT/lib/common.sh"
 
 CONFIRMED=0
 LIST_ONLY=0
@@ -36,6 +32,14 @@ END
         *) printf 'Unknown option: %s\n' "$1" >&2; exit 2 ;;
     esac
 done
+
+# The outcomes live only as long as this run, which prints them at the end.
+# sudo_end comes from common.sh, which an early exit may not have loaded yet.
+RESULTS_FILE="$(mktemp -t steamos-handheld-teardown-results.XXXXXX)"
+trap 'sudo_end 2>/dev/null || true; rm -f "$RESULTS_FILE"' EXIT
+export RESULTS_FILE
+
+. "$HANDHELD_KIT_ROOT/lib/common.sh"
 
 FLATPAK_APPS=(
     com.github.tchx84.Flatseal
@@ -77,13 +81,14 @@ printf "  Steam's configuration: the backups stay next to the originals\n"
 printf '  the log files in your home directory\n\n'
 
 if [ "$LIST_ONLY" = "1" ] || [ "$CONFIRMED" != "1" ]; then
-    printf 'Nothing was changed. To go ahead: %s./teardown.sh --confirm%s\n\n' "$C_BOLD" "$C_RESET"
+    printf 'Nothing was changed. To go ahead, run the teardown with %s--confirm%s\n\n' "$C_BOLD" "$C_RESET"
     exit 0
 fi
 
-# A second confirmation, typed, when there is a terminal to type into. Without
-# one --confirm is the whole of the go-ahead: it cannot have been passed by
-# accident, and the graphical launcher asks its own question before using it.
+# The typed confirmation, when there is a terminal to type into: this is the one
+# question the launcher's terminal window asks, after the list above. Without a
+# terminal --confirm is the whole of the go-ahead: it cannot have been passed by
+# accident, and the launcher shows this same list in a dialog before using it.
 if [ -t 0 ]; then
     printf '%sConfirmation required.%s Type REMOVE to go ahead: ' "$C_YELLOW" "$C_RESET"
     read -r answer
@@ -94,7 +99,6 @@ if [ -t 0 ]; then
 fi
 
 sudo_begin
-trap 'sudo_end; rm -f "${RESULTS_FILE:-}"' EXIT
 
 log_step "Remote access"
 if flatpak_has "$SUNSHINE"; then
@@ -122,7 +126,10 @@ for app in "${FLATPAK_APPS[@]}"; do
 done
 
 log_step "Decky Loader"
-if [ -d "$DECKY_DIR" ]; then
+if [ -d "$DECKY_DIR" ] && ! privileges_allowed; then
+    log_warn "removing Decky Loader needs administrator rights: left in place"
+    record "Decky Loader" SKIPPED "$NO_PRIVILEGES_DETAIL"
+elif [ -d "$DECKY_DIR" ]; then
     run "stopping the plugin_loader service" sudo systemctl disable --now plugin_loader || true
     run "removing the service unit" sudo rm -f /etc/systemd/system/plugin_loader.service || true
     run "reloading systemd" sudo systemctl daemon-reload || true
@@ -150,12 +157,33 @@ for f in "$HOME/Applications/EmuDeck.AppImage" \
          "$HOME/Applications/.emudeck-version" \
          "$HOME/.local/share/applications/xbox-cloud-gaming.desktop" \
          "$HOME/.local/share/applications/emudeck.desktop"; do
-    [ -e "$f" ] && { rm -f "$f" && log_ok "removed $f"; }
+    [ -e "$f" ] || continue
+    if run "removing $f" rm -f "$f"; then
+        record "$(basename "$f")" REMOVED ""
+    else
+        record "$(basename "$f")" FAILED ""
+    fi
 done
-[ -d "$HOME/Applications/GeForceNOW_Setup" ] && \
-    { rm -rf "$HOME/Applications/GeForceNOW_Setup" && log_ok "removed the GeForce NOW installer"; }
+if [ -d "$HOME/Applications/GeForceNOW_Setup" ]; then
+    if run "removing the GeForce NOW installer" rm -rf "$HOME/Applications/GeForceNOW_Setup"; then
+        record "GeForce NOW installer" REMOVED ""
+    else
+        record "GeForce NOW installer" FAILED ""
+    fi
+fi
 update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
 
-printf '\n%sRemoval complete.%s\n' "$C_GREEN" "$C_RESET"
-printf 'The Xbox Cloud Gaming and GeForce NOW entries stay in the Steam library:\n'
+printf '\n%sRemoval summary%s\n\n' "$C_BOLD" "$C_RESET"
+print_results
+failed="$(grep -c $'\tFAILED\t' "$RESULTS_FILE" 2>/dev/null || true)"
+failed="${failed:-0}"
+
+printf '\nThe Xbox Cloud Gaming and GeForce NOW entries stay in the Steam library:\n'
 printf 'remove them from there, with Steam open.\n\n'
+
+if [ "$failed" -gt 0 ]; then
+    printf '%sRemoval incomplete: %s entries failed. Details in %s%s\n\n' \
+        "$C_RED" "$failed" "$LOG_FILE" "$C_RESET"
+    exit 1
+fi
+printf '%sRemoval complete.%s\n\n' "$C_GREEN" "$C_RESET"

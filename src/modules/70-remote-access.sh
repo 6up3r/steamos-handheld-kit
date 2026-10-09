@@ -20,7 +20,8 @@ SUNSHINE=dev.lizardbyte.app.Sunshine
 log_step "Sunshine"
 flatpak_install "$SUNSHINE" "Sunshine" || status=1
 
-if ! flatpak_has "$SUNSHINE"; then
+# In a dry run the package is not there yet, and the plan still goes on.
+if [ "$DRY_RUN" != "1" ] && ! flatpak_has "$SUNSHINE"; then
     exit "$status"
 fi
 
@@ -32,6 +33,8 @@ log_step "System rules for remote control"
 if [ "$DRY_RUN" = "1" ]; then
     printf '  %s[dry run]%s would run additional-install.sh and enable the service\n' \
         "$C_YELLOW" "$C_RESET"
+    record "Sunshine udev rule" PLANNED "additional-install.sh"
+    record "Sunshine service" PLANNED "enabled at every sign-in"
     exit 0
 fi
 
@@ -59,7 +62,7 @@ if [ -w /dev/uinput ]; then
 else
     log_warn "/dev/uinput is not writable by this user"
     log_warn "the ACL is granted to the active session: check again after the next sign-in"
-    record "uinput access" MANUAL "restart the handheld and re-check with ./setup.sh --verify"
+    record "uinput access" MANUAL "sign out and back in, then check again with --verify"
 fi
 
 # ---------------------------------------------------------------------------

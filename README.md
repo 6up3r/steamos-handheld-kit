@@ -5,8 +5,9 @@ finished gaming machine: plugins, Windows-game compatibility, emulation, the gam
 are not Steam, and game streaming. No terminal, no commands to copy, nothing to install by
 hand.
 
-> **Version 0.1.0.** Run on exactly one handheld, on one day, by one person. It is careful and
-> it undoes itself, and it leaves your games and saves alone — but it is early, and says so
+> **Version 0.2.0.** Version 0.1.0 was run on exactly one handheld, on one day, by one person;
+> the fixes in 0.2.0 have been checked, but not yet run on a handheld. It is careful and it
+> undoes itself, and it leaves your games and saves alone — but it is early, and says so
 > rather than pretending otherwise. [What that means in practice](#where-this-project-stands).
 
 ## The problem this solves
@@ -30,7 +31,7 @@ half of it. This tool does that work in one run, and can be run again after ever
 | **ProtonPlus** | A small app for updating that layer later, without this tool |
 | **Heroic Games Launcher** | The games you already own on Epic, GOG and Amazon, in one app |
 | **Lutris** | The games that come from no store at all — old Windows titles, standalone installers, anything with a community install script |
-| **EmuDeck** | The standard emulation setup for handhelds. Downloaded and given a menu entry, with the ROM folders prepared on your memory card; you run its own setup once and pick the consoles |
+| **EmuDeck** | The standard emulation setup for handhelds. Downloaded and given a menu entry, with an `Emulation` folder created on your memory card when one is present; you run its own setup once and pick the consoles |
 | **Sunshine** | Turns the handheld into a screen you can stream to another computer, with a Moonlight client at the other end |
 | **SyncThingy** | Keeps folders — ROMs, saves — in sync with your desktop computer, over your own network |
 | **Xbox Cloud Gaming** | A Steam library entry that opens Game Pass streaming full-screen with the controller working. No Linux app exists, so it goes through a browser configured for the job |
@@ -46,9 +47,12 @@ power profiles, the TDP limits and the fan curves.
 **It never installs system packages.** This is the single most useful thing to know about
 SteamOS. The system partition is read-only, and there are two of them: every update writes a
 whole new one and reboots into it. Anything installed with `pacman` is simply gone afterwards,
-along with any trace of why things stopped working. So this tool only writes to the three
-places that survive an update — the Flatpak store, the Decky folder, and your home directory.
-Advice that starts with `sudo steamos-readonly disable` will cost you an afternoon later.
+along with any trace of why things stopped working. So this tool itself only writes to the
+three places that survive an update — the Flatpak store, the Decky folder, and your home
+directory. The Decky and Sunshine installers it runs also write under `/etc`: the Decky
+service unit `plugin_loader.service` in `/etc/systemd/system`, and the Sunshine udev rule
+`60-sunshine.rules` in `/etc/udev/rules.d`. Advice that starts with
+`sudo steamos-readonly disable` will cost you an afternoon later.
 
 It also does not:
 
@@ -60,7 +64,7 @@ It also does not:
   they are the right tool; elsewhere they fight the vendor's own driver.
 - **change per-game settings.** It sets the global default compatibility tool and nothing else.
 - **sign in anywhere for you**, collect anything, or send anything anywhere. It downloads from
-  each project's own servers, and that is all.
+  Flathub and from each project's own release pages, and that is all.
 - **touch your ROMs, saves, installed games or accounts**, on installation or on removal.
 
 ## What you need
@@ -73,11 +77,16 @@ It also does not:
 | **Space** | About 10 GB free in your home directory; around 1 GB is downloaded |
 | **A memory card** | Optional. When one is present, ROM folders go there instead of the internal drive |
 
-Tested on one machine: an ASUS ROG Xbox Ally on SteamOS 3.8. It should work on other AMD
-handhelds running SteamOS, the Steam Deck included — the components are the same everywhere,
-and only the hardware checks differ, adapting to what the machine reports. It refuses to run on
-anything that is not x86_64, because the compatibility layer, the plugin loader and the
-emulation front-end are published for that architecture alone.
+The memory card is found under `/run/media`: a card labelled `ROMS` if there is one, otherwise
+the writable removable drive with the most free space. To name a different one, set
+`HANDHELD_KIT_SD_MOUNT` to its mount point for the run, from a terminal:
+`HANDHELD_KIT_SD_MOUNT=/run/media/<user>/<label> ./SteamOS-Handheld-Kit-*.AppImage`.
+
+Version 0.1.0 was tested on one machine: an ASUS ROG Xbox Ally on SteamOS 3.8. It should work
+on other AMD handhelds running SteamOS, the Steam Deck included — the components are the same
+everywhere, and only the hardware checks differ, adapting to what the machine reports. It
+refuses to run on anything that is not x86_64, because the compatibility layer, the plugin
+loader and the emulation front-end are published for that architecture alone.
 
 ## How to run it
 
@@ -91,11 +100,11 @@ emulation front-end are published for that architecture alone.
    file, never in the log, never visible in the list of running programs. If this handheld has
    never had a password, the tool notices and offers to set one first, in the window it opened.
    You can decline either way, and everything that needs no administrator rights still
-   installs.
+   installs; the plugin system is then reported as skipped, and nothing asks again.
 6. **Watch it work.** A terminal window shows each step. Expect fifteen to forty minutes,
    mostly downloading.
-7. **Read the summary**, one line per component: installed, already present, skipped, failed,
-   or *needs you*.
+7. **Read the summary**, one line per component: installed, updated, already present, skipped,
+   failed, or *needs you*.
 
 Running it again is safe, and is the intended way to use it: every step looks at the current
 state before acting, so a second run fills in what is missing and leaves the rest alone. After
@@ -130,14 +139,23 @@ The summary lists each of these as **needs you**. None of them means something w
 
 ## How to undo it
 
-Double-click the same file and choose **Remove it**. It lists what it is about to remove, asks
-once, and then removes it: the applications, the plugin system, the compatibility layer builds,
-the menu entries and its own working files. From a terminal:
+Double-click the same file and choose **Remove it**. A password box appears first, because
+removing the plugin system needs administrator rights. The terminal window that opens then
+lists what it is about to remove and asks once, for you to type `REMOVE`, before it removes
+anything: the applications, the plugin system, the compatibility layer builds, the menu entries
+and its own working files. It ends with one line per component, removed or failed. Where no
+terminal window can be opened, a dialog shows the same list and asks instead. From a terminal:
 
 ```bash
 ./SteamOS-Handheld-Kit-*.AppImage --teardown            # list, remove nothing
 ./SteamOS-Handheld-Kit-*.AppImage --teardown --confirm  # actually remove
 ```
+
+The removal covers every component of those kinds, including copies that were already on the
+handheld before the kit ran: any app on its Flatpak list, the whole `~/homebrew` folder with
+its plugins and themes, and every GE-Proton build. It does not reset Steam's default
+compatibility tool, and it leaves the Flatpak permission overrides and the user-scope Flathub
+remote in place.
 
 Your ROMs, saves, installed games and accounts are not touched. Two things it cannot remove for
 you: entries already in your Steam library — remove those from Steam itself, with Steam open —
@@ -178,20 +196,23 @@ fallback installs it for your user instead, in a place system updates also leave
 permission it needs is granted at sign-in.
 
 **Anything else.** Every run writes `~/steamos-handheld-kit.log`, with each command and its
-output, and `~/steamos-handheld-kit-results.tsv`, one line per component. Those two are what to
-look at, and what to attach if you open an issue.
+output, and `~/steamos-handheld-kit-results.tsv`, one line per component. A removal writes its
+own log, `~/steamos-handheld-kit-teardown.log`. Those are what to look at, and what to attach
+if you open an issue.
 
 ## Where this project stands
 
-**What has been done.** The setup has been run end to end on a real handheld, and its
+**What has been done.** Version 0.1.0 has been run end to end on a real handheld, and its
 verification pass — which asks the running system rather than re-reading the script — reports
 all 36 checks in place. The AppImage was built and run there, and the double-click path driven
 through from the menu to the closing dialog. Every awkward detail it handles — the plugin
 loader's channel, the way Steam rewrites its configuration when it exits, the browser sandbox
 and the gamepad, the streaming permissions — was found by hitting it on that machine.
 
-**What has not.** One model, one person, one day. It has never run on a Steam Deck, nor on a
-second unit of any kind, nor on a machine set up differently from that one. The
+**What has not.** Version 0.2.0 has not run on a handheld at all: its fixes were checked
+statically, and by probing the changed code in isolation. One model, one person, one day. It
+has never run on a Steam Deck, nor on a second unit of any kind, nor on a machine set up
+differently from that one. The
 [CHANGELOG](CHANGELOG.md) lists exactly what was and was not exercised, item by item.
 
 That is the reason for the version number. It stays below 1.0 until people who did not write it
@@ -206,7 +227,7 @@ exactly what an issue needs.
   including what was considered and rejected.
 - [CHANGELOG.md](CHANGELOG.md) — what changed, and what is and is not tested.
 
-Building it needs an x86_64 Linux with `bash`, `python3`, `curl` and `coreutils`:
+Building it needs an x86_64 Linux with `bash`, `python3`, `curl`, `coreutils` and `findutils`:
 
 ```bash
 ./build.sh   # checks the sources, then writes dist/SteamOS-Handheld-Kit-<version>-x86_64.AppImage

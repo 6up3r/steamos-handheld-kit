@@ -35,6 +35,7 @@ log_step "Proton-GE"
 if [ "$DRY_RUN" = "1" ]; then
     printf '  %s[dry run]%s would query %s and install the latest x86_64 release\n' \
         "$C_YELLOW" "$C_RESET" "$PROTON_GE_API"
+    record "Proton-GE" PLANNED "latest x86_64 release"
     exit 0
 fi
 

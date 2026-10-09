@@ -75,7 +75,7 @@ acquire_privileges() {
 
     local attempt password
     for attempt in 1 2 3; do
-        password="$(gui_password "Password for $USER" || true)"
+        password="$(gui_password "Password for $SETUP_USER" || true)"
         if [ -z "$password" ]; then
             return 1
         fi
@@ -158,6 +158,9 @@ if [ "$needs_privileges" = "1" ]; then
 
 The steps that need them - installing the plugin system, and removing it - will be reported as not done. Everything else works normally."; then
             printf 'Continuing without administrator rights.\n'
+            # Read by sudo_begin and the privileged steps, which then skip
+            # instead of asking for the password a second time.
+            export HANDHELD_KIT_NO_PRIVILEGES=1
         else
             printf 'Cancelled: nothing was changed.\n'
             status=1

@@ -68,7 +68,7 @@ log_module() {
 
 # --------------------------------------------------------------------------
 # Outcomes for the final summary: component <TAB> outcome <TAB> detail
-# States: INSTALLED PRESENT UPDATED SKIPPED FAILED MANUAL VERIFIED REMOVED
+# States: INSTALLED PRESENT UPDATED SKIPPED FAILED MANUAL VERIFIED REMOVED PLANNED
 # --------------------------------------------------------------------------
 record() {
     local component="$1" outcome="$2" detail="${3:-}"
@@ -76,13 +76,35 @@ record() {
     # action (installed, updated, removed) would be a prediction dressed up as
     # a fact, and is declared as such. Outcomes that come from a real
     # observation - PRESENT, VERIFIED, MANUAL - hold either way and are left
-    # untouched.
-    if [ "$DRY_RUN" = "1" ]; then
+    # untouched. A module that only observes sets OBSERVATION_ONLY=1, and its
+    # FAILED is then a finding rather than a prediction.
+    if [ "$DRY_RUN" = "1" ] && [ "${OBSERVATION_ONLY:-0}" != "1" ]; then
         case "$outcome" in
             INSTALLED|UPDATED|REMOVED|FAILED) outcome="PLANNED" ;;
         esac
     fi
     printf '%s\t%s\t%s\n' "$component" "$outcome" "$detail" >> "$RESULTS_FILE"
+}
+
+# One line per recorded outcome, coloured by state.
+print_results() {
+    local component outcome detail colour
+    if [ ! -s "$RESULTS_FILE" ]; then
+        printf '  (no outcome recorded)\n'
+        return 0
+    fi
+    while IFS=$'\t' read -r component outcome detail; do
+        case "$outcome" in
+            INSTALLED|UPDATED|VERIFIED|REMOVED) colour="$C_GREEN" ;;
+            PRESENT)                            colour="$C_CYAN"  ;;
+            PLANNED)                            colour="$C_BLUE"  ;;
+            SKIPPED|MANUAL)                     colour="$C_YELLOW";;
+            FAILED)                             colour="$C_RED"   ;;
+            *)                                  colour=""         ;;
+        esac
+        printf '  %s%-12s%s %-34s %s%s%s\n' \
+            "$colour" "$outcome" "$C_RESET" "$component" "$C_DIM" "$detail" "$C_RESET"
+    done < "$RESULTS_FILE"
 }
 
 # --------------------------------------------------------------------------
@@ -311,6 +333,10 @@ SUDO_KEEPALIVE_PID=""
 # timestamp, so `sudo -n true` succeeds here and nothing is asked twice.
 sudo_begin() {
     [ "$DRY_RUN" = "1" ] && return 0
+    if [ "${HANDHELD_KIT_NO_PRIVILEGES:-0}" = "1" ]; then
+        log_warn "continuing without administrator rights, as chosen: the steps that need them are skipped"
+        return 0
+    fi
     if sudo -n true 2>/dev/null; then
         log_info "privileges already available"
     elif [ "$(password_status)" = "unset" ]; then
@@ -340,6 +366,17 @@ sudo_end() {
     [ -n "${SUDO_KEEPALIVE_PID:-}" ] && kill "$SUDO_KEEPALIVE_PID" 2>/dev/null
     SUDO_KEEPALIVE_PID=""
 }
+
+# Whether a privileged step may run. Once the user has declined the password in
+# the launcher (HANDHELD_KIT_NO_PRIVILEGES=1) no prompt may appear, so only a
+# ticket that already exists counts; otherwise sudo is left to behave as usual.
+privileges_allowed() {
+    [ "$DRY_RUN" = "1" ] && return 0
+    [ "${HANDHELD_KIT_NO_PRIVILEGES:-0}" = "1" ] || return 0
+    sudo -n true 2>/dev/null
+}
+
+NO_PRIVILEGES_DETAIL="needs administrator rights, which were declined"
 
 # --------------------------------------------------------------------------
 # Network
@@ -398,18 +435,23 @@ download_verified() {
 # --------------------------------------------------------------------------
 PYTHON_VDF=""
 
-ensure_python_vdf() {
-    # Should a future SteamOS ship the module, the virtual environment becomes
-    # redundant and is ignored.
+# The interpreter that already imports vdf, or nothing. It installs nothing, so
+# the verification can use it without changing the machine. Should a future
+# SteamOS ship the module, the virtual environment becomes redundant and is
+# ignored.
+find_python_vdf() {
     if python3 -c 'import vdf' 2>/dev/null; then
-        PYTHON_VDF="$(command -v python3)"
-        log_ok "the vdf module is available in the system interpreter"
-        return 0
+        command -v python3
+    elif [ -x "$VENV_DIR/bin/python" ] && "$VENV_DIR/bin/python" -c 'import vdf' 2>/dev/null; then
+        printf '%s\n' "$VENV_DIR/bin/python"
     fi
+    return 0
+}
 
-    if [ -x "$VENV_DIR/bin/python" ] && "$VENV_DIR/bin/python" -c 'import vdf' 2>/dev/null; then
-        PYTHON_VDF="$VENV_DIR/bin/python"
-        log_ok "virtual environment already prepared"
+ensure_python_vdf() {
+    PYTHON_VDF="$(find_python_vdf)"
+    if [ -n "$PYTHON_VDF" ]; then
+        log_ok "the vdf module is available: $PYTHON_VDF"
         return 0
     fi
 

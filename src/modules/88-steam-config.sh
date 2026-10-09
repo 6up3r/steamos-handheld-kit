@@ -47,6 +47,8 @@ if [ "$DRY_RUN" = "1" ]; then
     [ -n "$proton_ge" ] && printf '  %s[dry run]%s would set %s as the global default\n' \
         "$C_YELLOW" "$C_RESET" "$proton_ge"
     printf '  %s[dry run]%s would start Steam again\n' "$C_YELLOW" "$C_RESET"
+    record "Xbox Cloud Gaming in library" PLANNED "non-Steam entry"
+    record "Proton-GE default" PLANNED "${proton_ge:-the newest Proton-GE installed}"
     exit 0
 fi
 
@@ -73,7 +75,7 @@ if steam_running; then
 
     if steam_running; then
         log_err "Steam did not close within 30 seconds: no change applied"
-        log_err "close it by hand and run again: ./setup.sh --only 88-steam-config"
+        log_err "close it by hand and run again with --only 88-steam-config"
         record "Steam configuration" FAILED "Steam still running"
         exit 1
     fi

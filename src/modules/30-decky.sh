@@ -12,6 +12,11 @@ HANDHELD_KIT_ROOT="${HANDHELD_KIT_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}
 
 status=0
 
+# Everything downloaded here - scripts run with sudo among them - goes into a
+# directory only this user can write, removed on exit whatever the outcome.
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
 # Which channel to install.
 #
 # Decky's frontend grafts itself onto Steam's user interface through Steam's
@@ -64,13 +69,18 @@ if decky_installed && systemctl is-active --quiet plugin_loader 2>/dev/null; the
     version="$(decky_version)"
     log_ok "already installed and running (version $version)"
     record "Decky Loader" PRESENT "version $version"
+elif ! privileges_allowed; then
+    log_warn "installing Decky Loader needs administrator rights: skipped, and its plugins with it"
+    record "Decky Loader" SKIPPED "$NO_PRIVILEGES_DETAIL"
+    record "Decky plugins" SKIPPED "need a running Decky Loader"
+    exit 0
 else
     # The official installer also repairs an existing installation whose
     # systemd unit a SteamOS update has overwritten.
     if decky_installed; then
         log_warn "present but the service is not active: repairing"
     fi
-    installer_tmp="${TMPDIR:-/tmp}/decky-install.sh"
+    installer_tmp="$work/decky-install.sh"
     if download_verified "$DECKY_INSTALLER" "$installer_tmp" ""; then
         if run_visible "running the Decky installer" sudo -E bash "$installer_tmp"; then
             log_ok_done "Decky Loader installed"
@@ -80,7 +90,6 @@ else
             record "Decky Loader" FAILED "installer ended with an error"
             exit 1
         fi
-        rm -f "$installer_tmp"
     else
         record "Decky Loader" FAILED "installer download failed"
         exit 1
@@ -98,10 +107,17 @@ fi
 # The service is stopped before either file is touched: while running, Decky
 # notices the substitution and reverses it.
 # ---------------------------------------------------------------------------
-if [ "$CHANNEL" = "prerelease" ] && [ "$DRY_RUN" != "1" ]; then
+if [ "$CHANNEL" = "prerelease" ] && [ "$DRY_RUN" = "1" ]; then
+    printf '  %s[dry run]%s would install the latest pre-release and set the pre-release channel\n' \
+        "$C_YELLOW" "$C_RESET"
+    record "Decky pre-release" PLANNED "latest pre-release, channel set to pre-release"
+elif [ "$CHANNEL" = "prerelease" ] && ! privileges_allowed; then
+    log_warn "switching to the pre-release channel needs administrator rights: skipped"
+    record "Decky pre-release" SKIPPED "$NO_PRIVILEGES_DETAIL"
+elif [ "$CHANNEL" = "prerelease" ]; then
     log_step "Switching to the pre-release channel"
 
-    releases_json="${TMPDIR:-/tmp}/decky-releases.json"
+    releases_json="$work/decky-releases.json"
     tag=""
     url=""
     if curl -fsSL -m 30 "$DECKY_API" -o "$releases_json"; then
@@ -125,7 +141,7 @@ PY
     fi
     rm -f "$releases_json"
 
-    installed_version="$(cat "$DECKY_DIR/services/.loader.version" 2>/dev/null || echo '?')"
+    installed_version="$(decky_version)"
 
     if [ -z "$tag" ] || [ -z "$url" ]; then
         log_err "no pre-release found"
@@ -136,13 +152,13 @@ PY
         record "Decky pre-release" PRESENT "$tag"
     else
         log_info "latest pre-release: $tag (installed: $installed_version)"
-        if download_verified "$url" "${TMPDIR:-/tmp}/PluginLoader.pre" ""; then
-            chmod +x "${TMPDIR:-/tmp}/PluginLoader.pre"
-            cat > "${TMPDIR:-/tmp}/decky-channel.sh" <<SCRIPT
+        if download_verified "$url" "$work/PluginLoader.pre" ""; then
+            chmod +x "$work/PluginLoader.pre"
+            cat > "$work/decky-channel.sh" <<SCRIPT
 #!/usr/bin/env bash
 set -e
 systemctl stop plugin_loader
-cp "${TMPDIR:-/tmp}/PluginLoader.pre" "$DECKY_DIR/services/PluginLoader"
+cp "$work/PluginLoader.pre" "$DECKY_DIR/services/PluginLoader"
 chmod +x "$DECKY_DIR/services/PluginLoader"
 chown root:root "$DECKY_DIR/services/PluginLoader"
 echo "$tag" > "$DECKY_DIR/services/.loader.version"
@@ -155,7 +171,7 @@ json.dump(settings, open(path, 'w'), indent=4)
 "
 systemctl start plugin_loader
 SCRIPT
-            if run "installing pre-release $tag" sudo bash "${TMPDIR:-/tmp}/decky-channel.sh"; then
+            if run "installing pre-release $tag" sudo bash "$work/decky-channel.sh"; then
                 sleep 4
                 if systemctl is-active --quiet plugin_loader; then
                     log_ok "pre-release $tag active, channel set to pre-release"
@@ -169,7 +185,7 @@ SCRIPT
                 record "Decky pre-release" FAILED "substitution failed"
                 status=1
             fi
-            rm -f "${TMPDIR:-/tmp}/PluginLoader.pre" "${TMPDIR:-/tmp}/decky-channel.sh"
+            rm -f "$work/PluginLoader.pre" "$work/decky-channel.sh"
         else
             record "Decky pre-release" FAILED "download failed"
             status=1
@@ -181,10 +197,7 @@ fi
 # Store index, downloaded once for every plugin
 # ---------------------------------------------------------------------------
 log_step "Plugin index"
-INDEX="${TMPDIR:-/tmp}/decky-store.json"
-# The index is only needed for the lifetime of this module: it is removed on
-# exit whatever the outcome.
-trap 'rm -f "$INDEX"' EXIT
+INDEX="$work/decky-store.json"
 if [ "$DRY_RUN" = "1" ]; then
     log_info "[dry run] would download the index from $STORE_INDEX"
 else
@@ -216,7 +229,9 @@ PY
 # ---------------------------------------------------------------------------
 # Plugins
 # ---------------------------------------------------------------------------
-mkdir -p "$DECKY_DIR/plugins" 2>/dev/null || true
+if [ "$DRY_RUN" != "1" ]; then
+    mkdir -p "$DECKY_DIR/plugins" 2>/dev/null || true
+fi
 plugins_changed=0
 
 for name in "${PLUGINS[@]}"; do
@@ -224,6 +239,7 @@ for name in "${PLUGINS[@]}"; do
 
     if [ "$DRY_RUN" = "1" ]; then
         printf '  %s[dry run]%s would resolve and install "%s"\n' "$C_YELLOW" "$C_RESET" "$name"
+        record "$name" PLANNED "latest version in the store index"
         continue
     fi
 
@@ -262,8 +278,13 @@ except Exception: print('')
     if [ -n "$installed" ]; then
         log_info "installed $installed, available $version"
     fi
+    if ! privileges_allowed; then
+        log_warn "writing into the plugins directory needs administrator rights: skipped"
+        record "$name" SKIPPED "$NO_PRIVILEGES_DETAIL"
+        continue
+    fi
 
-    archive="${TMPDIR:-/tmp}/decky-plugin-$hash.zip"
+    archive="$work/plugin-$hash.zip"
     if ! download_verified "$CDN_BASE/$hash.zip" "$archive" "$hash"; then
         record "$name" FAILED "download or checksum invalid"
         status=1
@@ -289,8 +310,13 @@ except Exception: print('')
     fi
     if sudo cp -r "$inner" "$plugin_dir" && sudo chown -R "$SETUP_USER:$SETUP_USER" "$plugin_dir"; then
         echo "$version" > "$marker"
-        log_ok "installed: version $version"
-        record "$name" INSTALLED "version $version"
+        if [ -n "$installed" ]; then
+            log_ok "updated: version $installed -> $version"
+            record "$name" UPDATED "version $installed -> $version"
+        else
+            log_ok "installed: version $version"
+            record "$name" INSTALLED "version $version"
+        fi
         plugins_changed=$((plugins_changed + 1))
     else
         log_err "copying into the plugins directory failed"

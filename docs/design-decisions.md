@@ -10,18 +10,26 @@ skipped, a plugin already at the published version is left alone, a configuratio
 written is not duplicated. A second run is a supported operation, not an accident, because the
 intended use includes running it again after every major system update.
 
-**Failures are visible.** `set -Eeuo pipefail` everywhere, and every success message derives
-from the real exit status of the step before it. A module that fails does not stop the others:
-it is recorded and appears in the summary.
+**Failures are visible.** `set -Eeuo pipefail` in every script except `appimage/lib/askpass.sh`,
+which uses `set -u` alone, and every success message derives from the real exit status of the
+step before it. A module that fails does not stop the others: it is recorded and appears in the
+summary.
 
-**A per-item summary.** The run ends with one line per component — installed, already present,
-skipped, failed, needs you — because a wall of scrolling output is not a report.
+**A per-item summary.** The run ends with one line per component — installed, updated, already
+present, skipped, failed, needs you — because a wall of scrolling output is not a report. The
+removal ends the same way, and its exit status says whether anything failed to come off.
 
 **Least privilege.** One password request, kept alive for the run. No password appears in the
 code, the logs, or a command line. The modules that need no privileges run without them, and
-`setup.sh` does not ask at all when the requested module is one of those.
+`setup.sh` does not ask at all when every module selected for the run is one of those. A
+password declined in the launcher stays declined: the steps that need it are reported as
+skipped rather than asked for again.
 
-**Reversibility.** The teardown removes exactly what the setup installs, and nothing else.
+**Reversibility.** The teardown removes every component of the kinds the setup installs,
+including copies that were already present before the kit ran: any app on its Flatpak list,
+the whole `~/homebrew` folder with its plugins and themes, and every GE-Proton build. It does
+not reset Steam's default compatibility tool, and it does not remove the Flatpak permission
+overrides or the user-scope Flathub remote.
 
 **Verification against the running system.** The final module does not re-read what the script
 believed it did: it asks systemd, Flatpak, the filesystem and a TCP port. A step that printed
@@ -47,7 +55,8 @@ warning about them is raised only on hardware that is not one.
 
 Covered in [internals.md](internals.md): the root filesystem is immutable and A/B, so anything
 `pacman` installs disappears at the next update. Flatpak, `~/homebrew` and the home directory
-are the three destinations that survive, and they are the only ones written to.
+are the three destinations that survive, and they are the only ones the kit writes to itself.
+The Decky and Sunshine installers it runs also write under `/etc`.
 
 ### Emulation: EmuDeck
 
@@ -137,22 +146,20 @@ terminal emulator.
 `build.sh` copies `src/` into the AppDir as it is. What a user runs from the AppImage is byte
 for byte what a contributor runs from a checkout, so a bug reproduces the same way in both.
 
-## What changed when this became distributable
+## Nothing is fixed to one machine
 
-The setup logic came from a working, verified configuration for one specific handheld. Turning
-it into something a stranger can run meant replacing everything that assumed that one machine.
-Each of these is a deliberate deviation from the version that was verified on hardware:
+The setup runs on any AMD handheld running SteamOS, so every assumption about a particular
+unit is a discovered fact instead:
 
-- **The memory card path is discovered, not assumed.** It was a constant containing both a
-  login name and a volume label. `detect_sd_mount()` now prefers an explicit
-  `HANDHELD_KIT_SD_MOUNT`, then a card labelled `ROMS`, then the writable removable filesystem
-  with the most free space.
+- **The memory card path is discovered.** Both the login name and the card's label vary per
+  machine. `detect_sd_mount()` prefers an explicit `HANDHELD_KIT_SD_MOUNT`, then a card
+  labelled `ROMS`, then the writable removable filesystem with the most free space.
 - **Hardware checks branch on the vendor** the firmware reports, instead of expecting one
   model's kernel modules. TDP controls are looked for at the vendor interface *or* at the
   generic hwmon power cap; the fan interface likewise. An unknown vendor is reported as unknown
   rather than as broken.
 - **The controller profile is found through the firmware board name** against the profiles
-  installed on the machine, instead of a filename fragment belonging to one model. The board
+  installed on the machine, not through a filename fragment belonging to one model. The board
   name comes first because that is the field the profiles actually key on; the product name is
   the fallback.
 - **HueSync is installed only where RGB lights exist**, and the verification expects it under
@@ -160,12 +167,14 @@ Each of these is a deliberate deviation from the version that was verified on ha
 - **The architecture check refuses anything but x86_64.** The compatibility layer, the plugin
   loader and the emulation front-end are all published for that architecture alone, so
   installing them elsewhere would produce a set of components that cannot run.
-- **`jq` is no longer used.** One module parsed a GitHub API response with it, while every
-  other JSON read in the project uses `python3`, which the preflight already requires. The
-  dependency was undeclared and the failure it produced looked like "no pre-release found".
+- **`jq` is not used.** Every JSON read in the project goes through `python3`, which the
+  preflight already requires. A module that parsed a GitHub API response with `jq` would
+  depend on a tool nothing declares, and its failure would look like "no pre-release found".
 - **GeForce NOW's missing prerequisites are reported as a manual step, not a failure.** They
   belong to NVIDIA's installer, not to this tool, and on a handheld without them the right
   outcome is "this part is yours to do", not a failed run.
-- **The teardown's typed confirmation is asked only where there is a terminal to type into.**
-  The graphical launcher asks its own question before passing `--confirm`, and a flag that
-  explicit cannot be given by accident.
+- **The teardown asks once, after showing what it removes.** Where there is a terminal to type
+  into, that is the typed `REMOVE` after the list, and the launcher adds no question of its own.
+  Where there is none, the launcher shows the same list in a dialog and asks there before
+  passing `--confirm`, and from the command line a flag that explicit cannot be given by
+  accident.

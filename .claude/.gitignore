@@ -1,0 +1,8 @@
+###> claude code ###
+settings.local.json
+scheduled_tasks.lock
+worktrees/
+logs/
+.cache/
+###< claude code ###
+sessions/

@@ -9,12 +9,14 @@ set -Eeuo pipefail
 HANDHELD_KIT_ROOT="${HANDHELD_KIT_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
 . "$HANDHELD_KIT_ROOT/lib/common.sh"
 
+export OBSERVATION_ONLY=1
+
 # In dry-run mode nothing has been changed: checking the state would measure
 # the system as it was, and report as missing everything a real run would have
 # installed.
 if [ "$DRY_RUN" = "1" ]; then
     log_info "verification not run in dry-run mode: nothing has been changed"
-    log_info "to check an already configured system: ./setup.sh --verify"
+    log_info "to check an already configured system, run it again with --verify"
     exit 0
 fi
 
@@ -96,8 +98,14 @@ log_step "Proton"
 proton_ge="$(latest_proton_ge)"
 if [ -n "$proton_ge" ]; then
     pass "Proton-GE installed: $proton_ge"
-    # Having the archive is not enough: what counts is that Steam uses it.
-    if grep -qa "\"$proton_ge\"" "$STEAM_ROOT/config/config.vdf" 2>/dev/null; then
+    # Having the archive is not enough: what counts is that Steam uses it, and
+    # Steam takes the global default from CompatToolMapping "0" alone - the
+    # same name elsewhere in config.vdf is a per-title choice.
+    python_vdf="$(find_python_vdf)"
+    if [ -z "$python_vdf" ]; then
+        fail "global default unreadable: the Python vdf module is not installed"
+    elif [ "$("$python_vdf" "$HANDHELD_KIT_ROOT/lib/steam_config.py" \
+              --config "$STEAM_ROOT/config/config.vdf" --print-proton 2>/dev/null || true)" = "$proton_ge" ]; then
         pass "set as the global default"
     else
         fail "global default not set to $proton_ge"
@@ -111,7 +119,8 @@ if sd_mounted; then
     pass "memory card mounted at $SD_MOUNT"
     inspect "Emulation folder on the card" test -d "$SD_MOUNT/Emulation"
 else
-    fail "memory card mounted"
+    # The card is optional: its absence is reported, and not counted.
+    printf '  %s[none]%s    %s\n' "$C_YELLOW" "$C_RESET" "no memory card mounted (optional, not counted)"
 fi
 inspect "EmuDeck downloaded"          test -x "$HOME/Applications/EmuDeck.AppImage"
 

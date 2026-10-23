@@ -83,8 +83,8 @@ vendor, the verification with and without a memory card and against a `config.vd
 default is not Proton-GE, the privilege decision for a range of `--only` and `--skip` values,
 the declined-password path through the Decky module and the removal, the removal's summary
 and status, the option errors and temporary files, a plugin upgrade, and GeForce NOW already in
-the library. The release-notes extraction was run on this file; the workflow itself has not
-run.
+the library. The release-notes extraction was run on this file, and the workflow published this
+release from the `v0.2.0` tag.
 
 ## [0.1.0] - 2026-08-08
 
